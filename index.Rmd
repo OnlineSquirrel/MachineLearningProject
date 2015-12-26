@@ -1,0 +1,133 @@
+---
+title: "Machine Learning Project - Weight Lifting Prediction"
+author: "Maja Nikolic"
+date: "December 26, 2015"
+output:
+  html_document:
+    highlight: tango
+    theme: cerulean
+---
+
+## Background
+With the increased use of devices like Jawbone Up, Nike FuelBand, and Fitbit it became easy and inexpensive to  collect a large amount of data about personal activity. Measurements are taken and recorded while performing various activities and can be later used for various experiments, project and analysis. We will use one of those data sets for our machine learning project.    
+
+## Goal of the Project
+Goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants and predict the manner in which they did the exercise. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  
+The variable that needs to be predicted is the "classe" variable.  
+
+## Data Source
+The data we used for this project can be found at HAR Web site:  *http://groupware.les.inf.puc-rio.br/har*  
+We downloaded both, training and testing data sets into corresponding data frames.  
+All our algorithms and modifications will be done on the training data set - the testing data set will be used at the end to get the final evaluation of the model we selected.
+
+```{r, message=FALSE, warning=FALSE}
+## Downloading the training and testing data sets
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(trainURL, destfile = "trainData.csv", method="curl")
+trainingRaw <- read.csv("trainData.csv")
+
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(testURL, destfile = "testData.csv", method="curl")
+testingRaw <- read.csv("testData.csv")
+```
+
+## Exploratory Data Analysis
+Let's take a look at some of the data before we start data clean-up and model selection.
+```{r, message=FALSE, warning=FALSE}
+dimTrain <- dim(trainingRaw)
+dimTest <- dim(testingRaw)
+```
+Training data set has `r dimTrain[1]` rows and `r dimTrain[2]` columns.  
+Testing data set has `r dimTest[1]` rows and `r dimTest[2]` columns.  
+Although we did look into all columns of both datasets, since the number of columns is `r dimTrain[2]`, we decided to display only a random sample of 8 columns:  
+```{r, message=FALSE, warning=FALSE}
+sampleCols <- sample(1:dimTrain[2],size=8,replace=FALSE)
+str(trainingRaw[,sampleCols])
+summary(trainingRaw[,sampleCols])
+```
+Let's also take a look at the variable we're supposed to predict - *classe.*
+```{r, message=FALSE, warning=FALSE}
+table(trainingRaw$classe)
+```
+
+## Data Clean-up
+As you can see from the previous section, there are `r dimTrain[2]` columns with too many of them containing a fair amount of NAs.  
+We will first eliminate all columns that offer no variability, by using the *nearZeroVal* function from caret package.
+```{r, message=FALSE, warning=FALSE}
+library(caret); library(kernlab)
+nearZeroV <- nearZeroVar(trainingRaw,saveMetrics=FALSE)
+trainingStep1 <- trainingRaw[,-nearZeroV]
+dimStep1 <- dim(trainingStep1)
+```
+We eliminated `r dimTrain[2] - dimStep1[2]` columns (that were adding no variability to the data set) and now we have `r dimStep1[1]` rows and `r dimStep1[2]` columns.
+
+Let's take a look if there are any columns that are still candidates for elimination.  
+We will eliminate another set of columns where more than 95% of rows/values are NAs.  
+```{r, message=FALSE, warning=FALSE}
+namesNAs <- names(which(colMeans(is.na(trainingStep1))>0.95))
+colsNAs <- which(colnames(trainingStep1) %in% namesNAs)
+trainingStep2 <- trainingStep1[,-colsNAs]
+dimStep2 <- dim(trainingStep2)
+```
+We eliminated another `r dimStep1[2] - dimStep2[2]` columns.  
+
+Since we were asked to predict classe variable based on belt, forearm, arm, and dumbell measurements, we will also eliminate timestamp and participant info factor variables:
+```{r, message=FALSE, warning=FALSE}
+removeColNames <- c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window', 'num_window')
+removeCols <- which(names(trainingStep2) %in% removeColNames)
+trainingClean <- trainingStep2[, -removeCols]
+dimClean <- dim(trainingClean)
+```
+
+Final version of the training set that we'll try to find a predictive model for has `r dimClean[1]` rows and `r dimClean[2]` columns.  
+
+## Cross-Validation
+But, in order to somewhat test and compare different models, and since our data set has plenty of records, we will use cross-validation.
+```{r, message=FALSE, warning=FALSE}
+set.seed(46864)
+inTrain <- createDataPartition(y=trainingClean$classe, p=0.75, list=FALSE)
+training <- trainingClean[inTrain,]
+crossValidation <- trainingClean[-inTrain,]
+```
+## Prediction Models
+We will try multiple predictive models and select, based on the results in the cross-validation data set, which on to use for the final prediction.  
+
+### Tree Model
+First model we tried was the *Tree model*
+```{r, message=FALSE, warning=FALSE}
+modFitTR <- train(classe~., method="rpart", data=training)
+library(rattle)
+fancyRpartPlot(modFitTR$finalModel)
+crossValidatePredTR <- predict(modFitTR,newdata=crossValidation)
+print(postResample(crossValidatePredTR, crossValidation$classe))
+```
+### Random Forest
+Second we'll use Random Forest model with all varaibles in the data set we have.
+```{r, message=FALSE, warning=FALSE}
+library(randomForest)
+modFitRF <- randomForest(classe~., data=training, importance=TRUE, ntree=100)
+print(modFitRF$confusion)
+crossValidatePredRF <- predict(modFitRF, newdata = crossValidation)
+print(postResample(crossValidatePredRF, crossValidation$classe))
+```
+
+## Final Model Selection
+As we can see from the 2 models prediction accuracies, Random Forest seems to be a better choice.  
+We will use it to predict, for one time only, the values in the testing data set we downloaded at the beginning - testingRaw.  
+We will apply the same transformations in the testing set as we did in the training set.  
+We will also eliminate the last column - *problem_id*.
+```{r, message=FALSE, warning=FALSE}
+testingStep1 <- testingRaw[,-nearZeroV]
+testingStep2 <- testingStep1[,-colsNAs]
+testingClean <- testingStep2[,-removeCols]
+testingClean <- testingClean[, -which(names(testingClean)=="problem_id")]
+testingPrediction <- predict(modFitRF, newdata=testingClean)
+```
+
+## Conclusion
+Predictions we got from our Random Forest model are: **`r testingPrediction`  **
+
+## References
+The data for this project was obtained from http://groupware.les.inf.puc-rio.br/har   
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H.  
+Qualitative Activity Recognition of Weight Lifting Exercises.
